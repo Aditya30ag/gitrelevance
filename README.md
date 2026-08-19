@@ -134,7 +134,14 @@ GitRelevance evaluates evidence through a multi-stage deterministic pipeline:
 
 ### Confidence Score (Evidence Strength)
 Confidence is computed as an **evidence-strength heuristic** normalized and clamped to `[0.05, 0.98]`:
-$$\text{Confidence} = 0.50 + \frac{\sum \text{Weights}}{2 \times \text{MAX\_ABS\_WEIGHT}}$$
+$$
+\texttt{Confidence}
+=
+0.50
++
+\frac{\sum \texttt{Weights}}
+{2 \times \texttt{MAX\_ABS\_WEIGHT}}
+$$
 
 > **Important Note:** Confidence is **NOT** a calibrated Bayesian probability. A confidence of 95% indicates an overwhelming accumulation of strong supporting evidence in the Git tree, not that the classification is statistically 95% likely to be correct.
 
