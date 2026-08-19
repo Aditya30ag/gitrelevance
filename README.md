@@ -138,7 +138,7 @@ Confidence is computed as an **evidence-strength heuristic** normalized and clam
 
 ```text
 Confidence = 0.50 + (sum(Weights) / (2 × MAX_ABS_WEIGHT))
-
+```
 > **Important Note:** Confidence is **NOT** a calibrated Bayesian probability. A confidence of 95% indicates an overwhelming accumulation of strong supporting evidence in the Git tree, not that the classification is statistically 95% likely to be correct.
 
 ---
