@@ -133,7 +133,8 @@ GitRelevance evaluates evidence through a multi-stage deterministic pipeline:
 - **Fix commit later reverted** (`-3`): Git's native revert trailer (`This reverts commit <sha>.`) indicates the fix was undone.
 
 ### Confidence Score (Evidence Strength)
-Confidence is computed as an **evidence-strength heuristic** normalized and clamped to `[0.05, 0.98]`:
+Confidence is computed as an evidence-strength heuristic normalized and clamped to `[0.05, 0.98]`:
+
 $$
 \texttt{Confidence}
 =
