@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gitrelevance"
+version = "0.1.0"
+description = "Analyze whether historical GitHub issues are still relevant to a codebase, using Git history as evidence"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "GitRelevance Contributors" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+dependencies = [
+    "gitpython>=3.1.0",
+    "PyGithub>=2.0.0",
+    "diskcache>=5.6.0",
+    "python-dotenv>=1.0.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "responses>=0.23.0",
+    "build>=1.0.0",
+    "twine>=5.0.0",
+]
+
+[project.scripts]
+gitrelevance = "gitrelevance.cli.commands:app"
+
+[project.urls]
+Homepage = "https://github.com/gitrelevance/gitrelevance"
+Repository = "https://github.com/gitrelevance/gitrelevance"
+Issues = "https://github.com/gitrelevance/gitrelevance/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gitrelevance"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
