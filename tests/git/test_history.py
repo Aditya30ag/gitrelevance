@@ -6,6 +6,7 @@ import pytest
 
 from gitrelevance.git.repository import GitRepository
 from gitrelevance.git.history import (
+    _extract_issue_numbers,
     build_commit_reference_index,
     commits_referencing,
     GitNativeRevertDetector,
@@ -187,3 +188,75 @@ class TestDefaultRevertDetector:
     def test_is_git_native(self) -> None:
         d = default_revert_detector()
         assert isinstance(d, GitNativeRevertDetector)
+
+
+class TestExtractIssueNumbers:
+    """Unit tests for the _extract_issue_numbers helper.
+
+    Validates that PR-number false positives ("pull request #42", "PR #42")
+    are excluded while genuine issue references ("Fix #12", "#34") are kept.
+    """
+
+    def test_simple_fix_reference(self) -> None:
+        assert _extract_issue_numbers("Fix #12: login bug") == [12]
+
+    def test_gh_prefix_reference(self) -> None:
+        assert _extract_issue_numbers("GH-5: add tests") == [5]
+
+    def test_multiple_issue_refs(self) -> None:
+        result = _extract_issue_numbers("Fix #12 and #34")
+        assert result == [12, 34]
+
+    def test_pr_number_filtered_merge_pull_request(self) -> None:
+        """'Merge pull request #42' should NOT match #42 as an issue."""
+        assert _extract_issue_numbers("Merge pull request #42 from org/feature") == []
+
+    def test_pr_number_filtered_bare_pr(self) -> None:
+        """'PR #42' should NOT match #42 as an issue."""
+        assert _extract_issue_numbers("PR #42: Add feature") == []
+
+    def test_mixed_pr_and_issue_refs(self) -> None:
+        """PR number is filtered, issue number is kept."""
+        result = _extract_issue_numbers(
+            "Merge pull request #50 from org/feature\n\nCloses #12"
+        )
+        assert result == [12]
+
+    def test_squash_merge_with_pr_title_and_fixes(self) -> None:
+        """GitHub squash-merge: PR # in title, issue # in body."""
+        msg = (
+            "Feature: Add auth (#42)\n"
+            "\n"
+            "* Fix #12: authentication\n"
+            "* Fix #34: validation\n"
+        )
+        result = _extract_issue_numbers(msg)
+        assert result == [12, 34]
+
+    def test_squash_merge_pr_numbers_not_matched(self) -> None:
+        """PR #42 and PR #43 should not appear as issue references."""
+        msg = "Merge PR #42 and PR #43"
+        assert _extract_issue_numbers(msg) == []
+
+    def test_issue_at_start_of_message(self) -> None:
+        assert _extract_issue_numbers("#7: docs update") == [7]
+
+    def test_github_autoclose_keywords(self) -> None:
+        msg = "closes #100, fixes #200, resolves #300"
+        result = _extract_issue_numbers(msg)
+        assert result == [100, 200, 300]
+
+    def test_no_false_positive_from_parenthetical_pr(self) -> None:
+        """'Feature (#42)' — parentheses block the word-boundary match."""
+        assert _extract_issue_numbers("Feature (#42)") == []
+
+    def test_pr_lowercase(self) -> None:
+        assert _extract_issue_numbers("pr #15: bugfix") == []
+
+    def test_unrelated_number_not_matched(self) -> None:
+        assert _extract_issue_numbers("just some text") == []
+
+    def test_deduplication(self) -> None:
+        """Same issue referenced twice should appear once."""
+        result = _extract_issue_numbers("Fix #5 and also #5 again")
+        assert result == [5]

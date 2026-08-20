@@ -12,6 +12,70 @@ from gitrelevance.git.repository import GitRepository
 # Cache key for the commit reference index on GitRepository instances
 _INDEX_CACHE_KEY = "_gitrelevance_commit_reference_index"
 
+# ---------------------------------------------------------------------------
+# Issue-number extraction helpers (private)
+# ---------------------------------------------------------------------------
+
+# Matches any #123-style number in a message body
+_HASH_ISSUE_RE = re.compile(r"#(\d+)")
+
+# Matches GH-123-style references (unambiguous, never a PR number)
+_GH_ISSUE_RE = re.compile(r"GH-(\d+)", re.IGNORECASE)
+
+# Detects PR-number contexts like "pull request #42" or "PR #42".
+# We check whether the 30 characters *before* the # match this pattern.
+_PR_CONTEXT_RE = re.compile(r"(?:pull\s+request|PR)\s+$", re.IGNORECASE)
+
+
+def _extract_issue_numbers(message: str) -> list[int]:
+    """Extract genuine issue numbers from a commit message.
+
+    Matches ``#123`` and ``GH-123`` patterns, but **excludes** numbers that
+    appear in PR-number contexts (e.g. ``pull request #42``, ``PR #42``).
+    Those are GitHub pull-request identifiers, *not* issue references, and
+    attributing a commit's file changes to a PR number causes evidence
+    cross-contamination across unrelated issues.
+
+    Returns a de-duplicated list of issue numbers in first-seen order.
+    """
+    numbers: list[int] = []
+    seen: set[int] = set()
+
+    # --- #NNN references ---
+    for match in _HASH_ISSUE_RE.finditer(message):
+        num = int(match.group(1))
+        if num in seen:
+            continue
+
+        start = match.start()
+
+        # Require a word boundary before '#': whitespace or start-of-string.
+        # This prevents matching inside URLs, file paths, or parenthetical
+        # PR-title patterns like "Feature (#42)".
+        if start > 0 and not message[start - 1].isspace():
+            continue
+
+        # Filter PR-number false positives.
+        # In squash-merge / merge-commit messages the subject line often
+        # reads "Merge pull request #42 from …".  The #42 there is a PR
+        # number, not an issue number.  We check the ~30 characters of
+        # context preceding the # to decide.
+        prefix = message[max(0, start - 30) : start]
+        if _PR_CONTEXT_RE.search(prefix):
+            continue
+
+        seen.add(num)
+        numbers.append(num)
+
+    # --- GH-NNN references (always unambiguous) ---
+    for match in _GH_ISSUE_RE.finditer(message):
+        num = int(match.group(1))
+        if num not in seen:
+            seen.add(num)
+            numbers.append(num)
+
+    return numbers
+
 
 def build_commit_reference_index(repo: GitRepository) -> dict[int, list[Commit]]:
     """Build an index mapping issue numbers to commits that reference them.
@@ -21,7 +85,9 @@ def build_commit_reference_index(repo: GitRepository) -> dict[int, list[Commit]]
     with large repositories (10,000+ commits).
 
     Issue references are detected by patterns like #123 or GH-123 in commit
-    messages, where N is an issue number.
+    messages, where N is an issue number.  PR-number references (e.g.
+    ``pull request #42``, ``PR #42``) are explicitly excluded to prevent
+    evidence cross-contamination.
 
     Args:
         repo: The GitRepository to build the index for
@@ -36,26 +102,12 @@ def build_commit_reference_index(repo: GitRepository) -> dict[int, list[Commit]]
     # Build the index by walking commits once
     index: dict[int, list[Commit]] = {}
 
-    # Pattern to match issue references: #123 or GH-123
-    issue_pattern = re.compile(r"(?:^|\s)#(\d+)|(?:^|\s)GH-(\d+)")
-
     for commit in repo.commits_since(None):
-        message = commit.message
-
-        # Find all issue references in the commit message
-        matches = issue_pattern.findall(message)
-
-        for match in matches:
-            # Each match is a tuple of (group1, group2), one will be empty
-            issue_num_str = match[0] or match[1]
-            if issue_num_str:
-                try:
-                    issue_num = int(issue_num_str)
-                    if issue_num not in index:
-                        index[issue_num] = []
-                    index[issue_num].append(commit)
-                except ValueError:
-                    continue
+        issue_nums = _extract_issue_numbers(commit.message)
+        for num in issue_nums:
+            if num not in index:
+                index[num] = []
+            index[num].append(commit)
 
     # Cache the index on the repo instance
     setattr(repo, _INDEX_CACHE_KEY, index)

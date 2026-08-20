@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Callable, Literal, Optional
 
 import typer
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 from gitrelevance import config
 from gitrelevance.analysis.engine import AnalysisEngine
 from gitrelevance.git.repository import GitRepository, NotAGitRepositoryError
 from gitrelevance.output.json import to_json
 from gitrelevance.output.terminal import TerminalRenderer
-from gitrelevance.providers.base import Provider
+from gitrelevance.providers.base import Provider, RateLimitExceededError
 from gitrelevance.providers.github import GitHubProvider
 
 app = typer.Typer(
@@ -25,9 +28,21 @@ app = typer.Typer(
 
 
 @app.callback()
-def callback() -> None:
+def callback(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose debug logging.",
+    ),
+) -> None:
     """GitRelevance: Analyze historical GitHub issues using Git history."""
-    pass
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 # Optional seam for dependency injection in tests
@@ -74,13 +89,13 @@ def analyze(
     ),
 ) -> None:
     """Analyze repository issues against local Git history."""
-    console = Console(stderr=True if json_output else False)
+    err_console = Console(stderr=True)
 
     # 1. Detect local Git repository
     try:
         repo = GitRepository(path)
     except NotAGitRepositoryError:
-        console.print(
+        err_console.print(
             f"[bold red]Error:[/bold red] Directory '{path}' is not a Git repository. "
             "Please run gitrelevance from within a git repository or pass a valid repository path."
         )
@@ -89,7 +104,7 @@ def analyze(
     # 2. Detect remote URL and parse owner/repo
     remote_url = repo.remote_url("origin")
     if not remote_url:
-        console.print(
+        err_console.print(
             "[bold red]Error:[/bold red] No 'origin' remote found in the repository. "
             "GitRelevance requires a GitHub remote to correlate issues."
         )
@@ -98,7 +113,7 @@ def analyze(
     # Parse GitHub owner/repo
     parsed = GitHubProvider.parse_remote(remote_url)
     if not parsed:
-        console.print(
+        err_console.print(
             f"[bold red]Error:[/bold red] Remote URL '{remote_url}' is not a recognized GitHub URL. "
             "Currently only GitHub-hosted repositories are supported."
         )
@@ -113,12 +128,17 @@ def analyze(
     elif _provider_factory is not None:
         provider = _provider_factory(owner, repo_name, token)
     else:
+        if not token and not json_output:
+            err_console.print(
+                "[yellow]Note:[/yellow] Running in unauthenticated mode (GITHUB_TOKEN not set). "
+                "GitHub API rate limit is 60 requests/hour."
+            )
         provider = GitHubProvider(owner=owner, repo=repo_name, token=token)
 
     # Validate state option
     state_normalized = state.lower()
     if state_normalized not in ("open", "closed", "all"):
-        console.print(
+        err_console.print(
             f"[bold red]Error:[/bold red] Invalid state '{state}'. Must be 'open', 'closed', or 'all'."
         )
         raise typer.Exit(code=1)
@@ -127,11 +147,10 @@ def analyze(
     since_dt: datetime | None = None
     if since:
         try:
-            # Parse YYYY-MM-DD
             parsed_date = datetime.strptime(since.strip(), "%Y-%m-%d")
             since_dt = parsed_date.replace(tzinfo=timezone.utc)
         except ValueError:
-            console.print(
+            err_console.print(
                 f"[bold red]Error:[/bold red] Invalid date format for --since: '{since}'. "
                 "Expected format: YYYY-MM-DD (e.g. 2024-01-01)."
             )
@@ -139,19 +158,8 @@ def analyze(
 
     # 5. Run AnalysisEngine
     engine = AnalysisEngine(repo, provider)
-    try:
-        results = engine.analyze(state=state_normalized)  # type: ignore[arg-type]
-    except Exception as e:
-        console.print(f"[bold red]Analysis failed:[/bold red] {e}")
-        raise typer.Exit(code=1)
 
-    # 6. Apply client-side --since filter
-    # Note: Filtering client-side is performed here; future optimization may
-    # push this down to provider.get_issues(since=...) for API efficiency.
-    if since_dt is not None:
-        results = [r for r in results if r.issue.created_at >= since_dt]
-
-    # Gather repository summary information
+    # Gather repository summary information (needed for both output modes)
     try:
         branch = repo.current_branch()
     except Exception:
@@ -171,14 +179,78 @@ def analyze(
         "short_sha": short_sha,
     }
 
-    # 7. Render output
-    if json_output:
-        json_str = to_json(results, repo_info)
-        typer.echo(json_str)
-    else:
-        out_console = Console()
-        renderer = TerminalRenderer(out_console)
-        renderer.render(results, repo_info)
+    t_start = time.perf_counter()
+
+    try:
+        if json_output:
+            # ---- JSON mode: collect all results, serialize at the end ----
+            results = list(engine.analyze_streaming(state=state_normalized))  # type: ignore[arg-type]
+
+            # Apply client-side --since filter
+            if since_dt is not None:
+                results = [r for r in results if r.issue.created_at >= since_dt]
+
+            results.sort(key=lambda r: r.issue.number)
+
+            json_str = to_json(results, repo_info)
+            typer.echo(json_str)
+
+        else:
+            # ---- Terminal mode: stream results with live progress ----
+            out_console = Console()
+            renderer = TerminalRenderer(out_console)
+
+            # Pre-fetch issue count for progress bar (cached after first call)
+            all_issues = provider.get_issues(state=state_normalized)  # type: ignore[arg-type]
+            if since_dt is not None:
+                visible_issues = [i for i in all_issues if i.created_at >= since_dt]
+            else:
+                visible_issues = all_issues
+            total = len(visible_issues)
+
+            renderer.render_header(repo_info, total)
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=err_console,
+                transient=True,
+            ) as progress:
+                task = progress.add_task("Analyzing issues...", total=total)
+
+                for result in engine.analyze_streaming(state=state_normalized):  # type: ignore[arg-type]
+                    # Apply client-side --since filter
+                    if since_dt is not None and result.issue.created_at < since_dt:
+                        progress.advance(task)
+                        continue
+
+                    progress.advance(task)
+                    renderer.render_result(result)
+
+            renderer.render_footer()
+
+            elapsed = time.perf_counter() - t_start
+            err_console.print(
+                f"[dim]Analysis completed in {elapsed:.1f}s ({len(visible_issues)} issues shown).[/dim]"
+            )
+
+    except RateLimitExceededError as e:
+        reset_info = f" Reset time: {e.reset_at}" if getattr(e, "reset_at", None) else ""
+        err_console.print(
+            f"\n[bold red]GitHub API Rate Limit Exceeded:[/bold red]{reset_info}\n"
+            "To resolve this, set your GitHub personal access token:\n"
+            "  [bold]export GITHUB_TOKEN='ghp_yourTokenHere'[/bold]\n"
+            "Authenticated requests receive 5,000 requests/hour."
+        )
+        raise typer.Exit(code=1)
+    except KeyboardInterrupt:
+        err_console.print("\n[yellow]Analysis interrupted by user.[/yellow]")
+        raise typer.Exit(code=130)
+    except Exception as e:
+        err_console.print(f"[bold red]Analysis failed:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 
 def main() -> None:

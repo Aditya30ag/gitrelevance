@@ -26,6 +26,15 @@ CLASSIFICATION_STYLES: dict[Classification, str] = {
     Classification.UNKNOWN: "bold magenta",
 }
 
+# Inline label styles for streaming mode (used per-result, not per-group)
+_CLASSIFICATION_LABEL_STYLES: dict[Classification, str] = {
+    Classification.RESOLVED: "green",
+    Classification.PROBABLY_RESOLVED: "cyan",
+    Classification.STILL_RELEVANT: "yellow",
+    Classification.OBSOLETE: "red",
+    Classification.UNKNOWN: "magenta",
+}
+
 
 class TerminalRenderer:
     """Renders issue analysis results to the terminal using Rich."""
@@ -37,6 +46,81 @@ class TerminalRenderer:
             console: Rich Console instance, or None to use default.
         """
         self.console = console or Console()
+
+    # ------------------------------------------------------------------
+    # Streaming API (called incrementally as results arrive)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_repo_info(repo_info: Mapping[str, Any] | Any) -> dict[str, str]:
+        """Normalise repo_info into a plain dict with known keys."""
+        if isinstance(repo_info, Mapping):
+            return {
+                "owner": repo_info.get("owner", "unknown"),
+                "repo": repo_info.get("repo", repo_info.get("name", "unknown")),
+                "branch": repo_info.get("branch", "unknown"),
+                "short_sha": str(repo_info.get("short_sha", repo_info.get("head_sha", "unknown")))[:7],
+            }
+        return {
+            "owner": getattr(repo_info, "owner", "unknown"),
+            "repo": getattr(repo_info, "repo", getattr(repo_info, "name", "unknown")),
+            "branch": getattr(repo_info, "branch", "unknown"),
+            "short_sha": str(getattr(repo_info, "short_sha", getattr(repo_info, "head_sha", "unknown")))[:7],
+        }
+
+    def render_header(self, repo_info: Mapping[str, Any] | Any, total_issues: int) -> None:
+        """Print the repository header before streaming begins.
+
+        Args:
+            repo_info: Mapping or object containing repo metadata.
+            total_issues: Total number of issues to be analysed.
+        """
+        info = self._extract_repo_info(repo_info)
+        self.console.print("[bold]GitRelevance[/bold]\n")
+        self.console.print(f"Repository: github.com/{info['owner']}/{info['repo']}")
+        self.console.print(f"Branch: {info['branch']}")
+        self.console.print(f"HEAD: {info['short_sha']}\n")
+        self.console.print(
+            f"Analyzing {total_issues} issue{'s' if total_issues != 1 else ''}...\n"
+        )
+
+    def render_result(self, result: AnalysisResult) -> None:
+        """Render a single AnalysisResult inline (streaming mode).
+
+        Each result is printed with its classification as an inline label
+        rather than being grouped by classification.
+
+        Args:
+            result: A single AnalysisResult to render.
+        """
+        style = _CLASSIFICATION_LABEL_STYLES.get(result.classification, "white")
+        conf_pct = int(round(result.confidence * 100))
+
+        self.console.print(
+            f"[bold]#{result.issue.number} {result.issue.title}[/bold]"
+            f"  [{style}]{result.classification.value}[/{style}]"
+            f"  [dim]{conf_pct}%[/dim]"
+        )
+
+        if result.evidence:
+            for ev in result.evidence:
+                line = self._format_evidence_item(ev)
+                self.console.print(f"  [green]✓[/green] {line}")
+        else:
+            self.console.print("  [dim]No evidence[/dim]")
+        self.console.print("")
+
+    def render_footer(self) -> None:
+        """Print the trailing disclaimer after all results have been streamed."""
+        separator = "━" * 40
+        self.console.print(f"[dim]{separator}[/dim]\n")
+        self.console.print(
+            "[dim]* Confidence is a heuristic evidence-strength score (0–100%), not a statistical probability.[/dim]"
+        )
+
+    # ------------------------------------------------------------------
+    # Batch API (backward-compatible, used by tests and --json fallback)
+    # ------------------------------------------------------------------
 
     def render(
         self,
@@ -51,23 +135,13 @@ class TerminalRenderer:
                        owner, repo (or name), branch, short_sha (or head_sha).
         """
         # Extract repo metadata
-        if isinstance(repo_info, Mapping):
-            owner = repo_info.get("owner", "unknown")
-            repo_name = repo_info.get("repo", repo_info.get("name", "unknown"))
-            branch = repo_info.get("branch", "unknown")
-            short_sha = repo_info.get("short_sha", repo_info.get("head_sha", "unknown"))[:7]
-        else:
-            owner = getattr(repo_info, "owner", "unknown")
-            repo_name = getattr(repo_info, "repo", getattr(repo_info, "name", "unknown"))
-            branch = getattr(repo_info, "branch", "unknown")
-            head_sha = getattr(repo_info, "short_sha", getattr(repo_info, "head_sha", "unknown"))
-            short_sha = str(head_sha)[:7]
+        info = self._extract_repo_info(repo_info)
 
         # Header
         self.console.print("[bold]GitRelevance[/bold]\n")
-        self.console.print(f"Repository: github.com/{owner}/{repo_name}")
-        self.console.print(f"Branch: {branch}")
-        self.console.print(f"HEAD: {short_sha}\n")
+        self.console.print(f"Repository: github.com/{info['owner']}/{info['repo']}")
+        self.console.print(f"Branch: {info['branch']}")
+        self.console.print(f"HEAD: {info['short_sha']}\n")
         self.console.print(f"Analyzing {len(results)} issue{'s' if len(results) != 1 else ''}...\n")
 
         # Group results by classification

@@ -139,10 +139,15 @@ class TestGitHubProviderMocked:
     def test_get_pull_requests_normalization(self, provider: GitHubProvider) -> None:
         mock_repo = MagicMock()
         mock_pr = MagicMock()
-        mock_pr.number = 5
-        mock_pr.title = "Add feature"
-        mock_pr.merged = True
-        mock_pr.merge_commit_sha = "1234567890abcdef"
+        # The new implementation reads from _rawData dict to avoid lazy-load API calls
+        mock_pr._rawData = {
+            "number": 5,
+            "title": "Add feature",
+            "merged_at": "2024-01-02T00:00:00Z",
+            "merge_commit_sha": "1234567890abcdef",
+            "body": "PR body",
+            "state": "closed",
+        }
         mock_file = MagicMock()
         mock_file.filename = "src/feature.py"
         mock_pr.get_files.return_value = [mock_file]
@@ -232,17 +237,25 @@ class TestGitHubProviderHTTPResponses:
     def test_http_endpoint_responses(self, tmp_path: object) -> None:
         import re
 
-        # Mock repo endpoint
+        # Mock repo endpoint — include full_url so PyGithub sets the correct base URL
         responses.add(
             responses.GET,
             re.compile(r"https://api\.github\.com(?::443)?/repos/octocat/Hello-World$"),
-            json={"name": "Hello-World", "owner": {"login": "octocat"}},
+            json={
+                "name": "Hello-World",
+                "full_name": "octocat/Hello-World",
+                "owner": {"login": "octocat"},
+                "url": "https://api.github.com/repos/octocat/Hello-World",
+                "html_url": "https://github.com/octocat/Hello-World",
+                "issues_url": "https://api.github.com/repos/octocat/Hello-World/issues{/number}",
+                "pulls_url": "https://api.github.com/repos/octocat/Hello-World/pulls{/number}",
+            },
             status=200,
         )
         # Mock issues endpoint page 1
         responses.add(
             responses.GET,
-            re.compile(r"https://api\.github\.com(?::443)?/repos/octocat/Hello-World/issues\?state=all"),
+            re.compile(r"https://api\.github\.com(?::443)?/repos/octocat/Hello-World/issues\?.*state=all"),
             json=[
                 {
                     "url": "https://api.github.com/repos/octocat/Hello-World/issues/101",

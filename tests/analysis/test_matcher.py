@@ -160,8 +160,10 @@ class TestMatcher:
         assert match_set.linked_prs[0].number == 10
         assert len(match_set.pr_commits) == 1
         assert match_set.pr_commits[0].sha == shas["pr_10_merge"]
-        # Related files should contain files from merge commit and PR files_changed (sorted & deduped)
-        assert match_set.related_files == ("bug.py", "extra.py")
+        # When merge commit IS resolved locally, pr.files_changed is skipped
+        # in favor of the merge commit's actual git diff (more accurate).
+        # The merge commit only touched bug.py, not extra.py.
+        assert match_set.related_files == ("bug.py",)
 
     def test_issue_linked_via_issue_linked_prs(
         self, test_repo: tuple[str, RepoBuilder, dict[str, str]]
@@ -225,7 +227,9 @@ class TestMatcher:
 
         assert len(match_set.linked_prs) == 1
         assert match_set.pr_commits == ()  # Missing commit skipped gracefully
-        assert match_set.related_files == ("remote_only.py",)
+        # Merged PRs whose merge commit is missing (shallow clone) also skip
+        # pr.files_changed to avoid cross-contamination from unrelated changesets.
+        assert match_set.related_files == ()
 
     def test_pr_deduplication(
         self, test_repo: tuple[str, RepoBuilder, dict[str, str]]
@@ -265,8 +269,10 @@ class TestMatcher:
         )
 
         match_set = build_match_set(issue, repo, provider_prs=[pr])
-        # Union should be auth.py, bug.py, config.py, zebra.py in alphabetical order
-        assert match_set.related_files == ("auth.py", "bug.py", "config.py", "zebra.py")
+        # Union from referencing commits (auth.py, config.py) + merge commit (bug.py).
+        # PR files_changed (zebra.py) is skipped because the merge commit IS resolved
+        # locally and its actual git diff is more accurate.
+        assert match_set.related_files == ("auth.py", "bug.py", "config.py")
 
     def test_build_all_match_sets_single_pr_fetch(
         self, test_repo: tuple[str, RepoBuilder, dict[str, str]]
