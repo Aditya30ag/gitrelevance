@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gitrelevance"
-version = "0.1.0"
+version = "0.1.1"
 description = "Analyze whether historical GitHub issues are still relevant to a codebase, using Git history as evidence"
 readme = "README.md"
 license = "MIT"
