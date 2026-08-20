@@ -2,7 +2,7 @@
 
 > Analyze whether historical GitHub issues are still relevant to a codebase, using Git history as evidence.
 
-[![CI](https://github.com/gitrelevance/gitrelevance/actions/workflows/ci.yml/badge.svg)](https://github.com/gitrelevance/gitrelevance/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/gitrelevance.svg)](https://pypi.org/project/gitrelevance/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python: >=3.10](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
