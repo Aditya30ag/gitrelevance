@@ -75,6 +75,13 @@ def analyze(
         "--since",
         help="Filter issues created on or after date (YYYY-MM-DD).",
     ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        "-t",
+        "--api-key",
+        help="GitHub Personal Access Token or API key for authenticated requests.",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -122,18 +129,18 @@ def analyze(
     owner, repo_name = parsed
 
     # 3. Construct provider
-    token = config.load_github_token()
+    resolved_token = token or config.load_github_token()
     if _provider_override is not None:
         provider = _provider_override
     elif _provider_factory is not None:
-        provider = _provider_factory(owner, repo_name, token)
+        provider = _provider_factory(owner, repo_name, resolved_token)
     else:
-        if not token and not json_output:
+        if not resolved_token and not json_output:
             err_console.print(
-                "[yellow]Note:[/yellow] Running in unauthenticated mode (GITHUB_TOKEN not set). "
+                "[yellow]Note:[/yellow] Running in unauthenticated mode (GITHUB_TOKEN / --token not set). "
                 "GitHub API rate limit is 60 requests/hour."
             )
-        provider = GitHubProvider(owner=owner, repo=repo_name, token=token)
+        provider = GitHubProvider(owner=owner, repo=repo_name, token=resolved_token)
 
     # Validate state option
     state_normalized = state.lower()
@@ -250,6 +257,29 @@ def analyze(
         raise typer.Exit(code=130)
     except Exception as e:
         err_console.print(f"[bold red]Analysis failed:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="auth")
+def auth(
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        "-t",
+        "--api-key",
+        help="GitHub Personal Access Token or API key to store.",
+    ),
+) -> None:
+    """Configure and store GitHub Personal Access Token / API key."""
+    console = Console()
+    if not token:
+        token = typer.prompt("Enter your GitHub Personal Access Token", hide_input=True)
+
+    if token and token.strip():
+        saved_path = config.save_github_token(token.strip())
+        console.print(f"[green]✓ Token saved successfully to {saved_path}[/green]")
+    else:
+        console.print("[red]Error: Token cannot be empty.[/red]")
         raise typer.Exit(code=1)
 
 

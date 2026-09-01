@@ -47,6 +47,7 @@ class GitRepository:
         try:
             self._repo = git.Repo(path, search_parent_directories=True)
             self.path = str(self._repo.working_dir)
+            self._ancestor_cache: dict[tuple[str, str], bool] = {}
         except (InvalidGitRepositoryError, NoSuchPathError, git.exc.GitError) as e:
             raise NotAGitRepositoryError(path) from e
 
@@ -133,12 +134,22 @@ class GitRepository:
         Raises:
             git.GitCommandError: If either commit doesn't exist
         """
+        cache = getattr(self, "_ancestor_cache", None)
+        if cache is not None:
+            cached = cache.get((ancestor_sha, descendant_sha))
+            if cached is not None:
+                return cached
+
         # Use git merge-base --is-ancestor which returns 0 if true, 1 if false
         try:
             self._repo.git.merge_base("--is-ancestor", ancestor_sha, descendant_sha)
-            return True  # git command succeeded, so it is an ancestor
+            res = True  # git command succeeded, so it is an ancestor
         except git.GitCommandError:
-            return False  # exit code 1 means not an ancestor
+            res = False  # exit code 1 means not an ancestor
+
+        if cache is not None:
+            cache[(ancestor_sha, descendant_sha)] = res
+        return res
 
     def commits_since(self, since: datetime | None = None) -> Iterator[Commit]:
         """Get commits since a given datetime.

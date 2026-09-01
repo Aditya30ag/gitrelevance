@@ -188,6 +188,9 @@ def build_all_match_sets(
 ) -> dict[int, MatchSet]:
     """Build match sets for all given issues, fetching pull requests only once.
 
+    Pre-indexes pull requests by closing issue numbers and PR numbers to correlate
+    issues in O(I + P) time rather than O(I * P).
+
     Args:
         issues: List of issues to correlate.
         repo: The local Git repository wrapper.
@@ -197,4 +200,31 @@ def build_all_match_sets(
         Dictionary mapping issue number to its corresponding MatchSet.
     """
     prs = provider.get_pull_requests(state="all")
-    return {issue.number: build_match_set(issue, repo, prs) for issue in issues}
+
+    # Invert PR index for O(1) issue-to-PR lookups
+    issue_to_closing_prs: dict[int, list[PullRequest]] = {}
+    pr_by_number: dict[int, PullRequest] = {}
+    for pr in prs:
+        pr_by_number[pr.number] = pr
+        for issue_num in pr.closes_issue_numbers:
+            issue_to_closing_prs.setdefault(issue_num, []).append(pr)
+
+    match_sets: dict[int, MatchSet] = {}
+    for issue in issues:
+        # Collect candidate PRs for this issue
+        candidate_prs: list[PullRequest] = []
+        seen_cand_nums: set[int] = set()
+
+        for pr in issue_to_closing_prs.get(issue.number, []):
+            if pr.number not in seen_cand_nums:
+                seen_cand_nums.add(pr.number)
+                candidate_prs.append(pr)
+
+        for pr_num in issue.linked_pr_numbers:
+            if pr_num in pr_by_number and pr_num not in seen_cand_nums:
+                seen_cand_nums.add(pr_num)
+                candidate_prs.append(pr_by_number[pr_num])
+
+        match_sets[issue.number] = build_match_set(issue, repo, candidate_prs)
+
+    return match_sets

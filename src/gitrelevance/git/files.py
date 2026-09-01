@@ -46,6 +46,54 @@ class FileOperations:
         """Access the underlying GitPython repo object."""
         return self._repo._repo  # type: ignore[return-value]
 
+    def _get_head_files(self) -> set[str]:
+        """Get or compute cached set of all file paths present at HEAD."""
+        if not hasattr(self._repo, "_head_files_cache"):
+            head_files: set[str] = set()
+            try:
+                head_commit = self._git_repo.head.commit
+                for item in head_commit.tree.traverse():
+                    if item.type == "blob":
+                        head_files.add(item.path)
+            except Exception:
+                pass
+            setattr(self._repo, "_head_files_cache", head_files)
+        return getattr(self._repo, "_head_files_cache")
+
+    def _get_rename_index(self) -> dict[str, list[tuple[str, str]]]:
+        """Get or compute cached repository-wide rename index."""
+        if not hasattr(self._repo, "_rename_index_cache"):
+            rename_index: dict[str, list[tuple[str, str]]] = {}
+            all_renames: list[tuple[str, str]] = []
+            try:
+                output: str = self._git_repo.git.log(
+                    "-M",
+                    "--diff-filter=R",
+                    "--name-status",
+                    "--format=",
+                )
+                for line in output.splitlines():
+                    line = line.strip()
+                    if not line or not line.startswith("R"):
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) >= 3:
+                        old, new = parts[1].strip(), parts[2].strip()
+                        all_renames.append((old, new))
+            except gitmodule.GitCommandError:
+                pass
+
+            # git log returns newest-first; reverse to get chronological order
+            all_renames.reverse()
+
+            for old, new in all_renames:
+                rename_index.setdefault(old, []).append((old, new))
+                if new != old:
+                    rename_index.setdefault(new, []).append((old, new))
+
+            setattr(self._repo, "_rename_index_cache", rename_index)
+        return getattr(self._repo, "_rename_index_cache")
+
     def file_exists_at_head(self, path: str) -> bool:
         """Check if a file exists at HEAD.
 
@@ -55,6 +103,9 @@ class FileOperations:
         Returns:
             True if the file exists at HEAD
         """
+        head_files = self._get_head_files()
+        if head_files:
+            return path in head_files
         try:
             self._git_repo.head.commit.tree[path]
             return True
@@ -111,6 +162,14 @@ class FileOperations:
         if self.file_exists_at_head(path):
             return False
 
+        deleted_cache = getattr(self._repo, "_was_deleted_cache", None)
+        if deleted_cache is None:
+            deleted_cache = {}
+            setattr(self._repo, "_was_deleted_cache", deleted_cache)
+
+        if path in deleted_cache:
+            return deleted_cache[path]
+
         # Check whether the path ever appeared in commit history
         try:
             output: str = self._git_repo.git.log(
@@ -122,6 +181,7 @@ class FileOperations:
             )
             # If git log --diff-filter=D finds anything, the file was deleted
             if output.strip():
+                deleted_cache[path] = True
                 return True
             # Also check if it was ever added at all (it might be renamed out)
             output2: str = self._git_repo.git.log(
@@ -131,8 +191,11 @@ class FileOperations:
                 "--",
                 path,
             )
-            return bool(output2.strip())
+            res = bool(output2.strip())
+            deleted_cache[path] = res
+            return res
         except Exception:
+            deleted_cache[path] = False
             return False
 
     def find_renames(self, path: str) -> list[tuple[str, str]]:
@@ -145,31 +208,8 @@ class FileOperations:
             List of (old_path, new_path) tuples showing the rename chain,
             in chronological order (oldest rename first).
         """
-        try:
-            # -M enables rename detection across repository commits
-            output: str = self._git_repo.git.log(
-                "-M",
-                "--diff-filter=R",
-                "--name-status",
-                "--format=",
-            )
-        except gitmodule.GitCommandError:
-            return []
-
-        renames: list[tuple[str, str]] = []
-        for line in output.splitlines():
-            line = line.strip()
-            if not line or not line.startswith("R"):
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 3:
-                old, new = parts[1].strip(), parts[2].strip()
-                if path == old or path == new:
-                    renames.append((old, new))
-
-        # git log returns newest-first; reverse to get chronological order
-        renames.reverse()
-        return renames
+        index = self._get_rename_index()
+        return list(index.get(path, []))
 
 
 # Convenience function to get file operations for a repository

@@ -162,3 +162,33 @@ def test_cli_since_filter() -> None:
         assert data["results"][0]["issue"]["number"] == 2
     finally:
         builder.cleanup()
+
+
+def test_cli_token_option_and_auth_command(tmp_path, monkeypatch) -> None:
+    """--token flag and auth command work properly."""
+    # Test auth command
+    custom_token_file = tmp_path / "token"
+    monkeypatch.setattr("gitrelevance.config.TOKEN_FILE", custom_token_file)
+    monkeypatch.setattr("gitrelevance.config.CONFIG_DIR", tmp_path)
+
+    result = runner.invoke(app, ["auth", "--token", "ghp_mock_token_12345"])
+    assert result.exit_code == 0
+    assert "Token saved successfully" in result.output
+    assert custom_token_file.read_text(encoding="utf-8").strip() == "ghp_mock_token_12345"
+
+    # Test analyze with --token
+    builder = (
+        RepoBuilder()
+        .commit("Initial commit", files={"README.md": "readme"})
+        .add_remote("origin", "https://github.com/testowner/testrepo.git")
+    )
+    path = builder.build()
+    try:
+        issue = make_issue(number=1, title="Test", state="closed")
+        fake_provider = FakeCLIProvider(issues=[issue])
+        set_provider_override(fake_provider)
+
+        res = runner.invoke(app, ["analyze", "--path", path, "--token", "ghp_custom_token", "--json"])
+        assert res.exit_code == 0
+    finally:
+        builder.cleanup()

@@ -11,6 +11,7 @@ from gitrelevance.git.repository import GitRepository
 
 # Cache key for the commit reference index on GitRepository instances
 _INDEX_CACHE_KEY = "_gitrelevance_commit_reference_index"
+_REVERT_INDEX_CACHE_KEY = "_gitrelevance_revert_index"
 
 # ---------------------------------------------------------------------------
 # Issue-number extraction helpers (private)
@@ -21,6 +22,9 @@ _HASH_ISSUE_RE = re.compile(r"#(\d+)")
 
 # Matches GH-123-style references (unambiguous, never a PR number)
 _GH_ISSUE_RE = re.compile(r"GH-(\d+)", re.IGNORECASE)
+
+# Matches standard git revert trailer: "This reverts commit <sha>."
+_REVERT_TRAILER_RE = re.compile(r"This reverts commit ([0-9a-fA-F]{40})\.")
 
 # Detects PR-number contexts like "pull request #42" or "PR #42".
 # We check whether the 30 characters *before* the # match this pattern.
@@ -89,6 +93,8 @@ def build_commit_reference_index(repo: GitRepository) -> dict[int, list[Commit]]
     ``pull request #42``, ``PR #42``) are explicitly excluded to prevent
     evidence cross-contamination.
 
+    Also populates the revert index mapping reverted SHAs to revert commits.
+
     Args:
         repo: The GitRepository to build the index for
 
@@ -99,8 +105,9 @@ def build_commit_reference_index(repo: GitRepository) -> dict[int, list[Commit]]
     if hasattr(repo, _INDEX_CACHE_KEY):
         return getattr(repo, _INDEX_CACHE_KEY)
 
-    # Build the index by walking commits once
+    # Build the indices by walking commits once
     index: dict[int, list[Commit]] = {}
+    revert_index: dict[str, list[Commit]] = {}
 
     for commit in repo.commits_since(None):
         issue_nums = _extract_issue_numbers(commit.message)
@@ -109,8 +116,15 @@ def build_commit_reference_index(repo: GitRepository) -> dict[int, list[Commit]]
                 index[num] = []
             index[num].append(commit)
 
-    # Cache the index on the repo instance
+        for match in _REVERT_TRAILER_RE.finditer(commit.message):
+            reverted_sha = match.group(1)
+            if reverted_sha not in revert_index:
+                revert_index[reverted_sha] = []
+            revert_index[reverted_sha].append(commit)
+
+    # Cache the indices on the repo instance
     setattr(repo, _INDEX_CACHE_KEY, index)
+    setattr(repo, _REVERT_INDEX_CACHE_KEY, revert_index)
 
     return index
 
@@ -186,15 +200,12 @@ class GitNativeRevertDetector:
             return []
         full_sha = target_commit.sha
 
-        reverts: list[Commit] = []
-        for commit in repo.commits_since(None):
-            # Look for the exact Git-generated trailer line.
-            # git revert writes: "This reverts commit <sha>."
-            # where <sha> is the full 40-character hex SHA.
-            if f"This reverts commit {full_sha}." in commit.message:
-                reverts.append(commit)
+        revert_index = getattr(repo, _REVERT_INDEX_CACHE_KEY, None)
+        if revert_index is None:
+            build_commit_reference_index(repo)
+            revert_index = getattr(repo, _REVERT_INDEX_CACHE_KEY, {})
 
-        return reverts
+        return list(revert_index.get(full_sha, []))
 
 
 # Default detector instance (module-level singleton)
