@@ -31,7 +31,7 @@ pip install gitrelevance
 
 For development:
 ```bash
-git clone https://github.com/gitrelevance/gitrelevance.git
+git clone https://github.com/Aditya30ag/gitrelevance.git
 cd gitrelevance
 pip install -e ".[dev]"
 ```

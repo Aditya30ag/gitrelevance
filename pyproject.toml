@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "GitRelevance Contributors" },
+    { name = "Aditya30ag" },
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -46,9 +46,9 @@ dev = [
 gitrelevance = "gitrelevance.cli.commands:app"
 
 [project.urls]
-Homepage = "https://github.com/gitrelevance/gitrelevance"
-Repository = "https://github.com/gitrelevance/gitrelevance"
-Issues = "https://github.com/gitrelevance/gitrelevance/issues"
+Homepage = "https://github.com/Aditya30ag/gitrelevance"
+Repository = "https://github.com/Aditya30ag/gitrelevance"
+Issues = "https://github.com/Aditya30ag/gitrelevance/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gitrelevance"]
